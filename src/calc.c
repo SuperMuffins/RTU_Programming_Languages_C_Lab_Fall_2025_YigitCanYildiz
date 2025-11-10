@@ -1,5 +1,11 @@
 // Yigit Can Yildiz 231ADB119
 
+//     cd src
+//     ls 
+//     gcc -std=c11 -O2 -Wall -Wextra -o calc calc.c -lm
+//     ./calc test8.txt
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,14 +17,12 @@
 #include <sys/types.h>
 
 #ifdef _WIN32
-#define SEP "\"
+#define SEP "\\"
 #else
 #define SEP "/"
 #endif
 
-typedef enum {
-    T_NUMBER, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_POW, T_LPAREN, T_RPAREN, T_EOF
-} TokenType;
+typedef enum { T_NUMBER, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_POW, T_LPAREN, T_RPAREN, T_EOF } TokenType;
 
 typedef struct {
     TokenType type;
@@ -36,7 +40,6 @@ typedef struct {
 } Scanner;
 
 static int g_err = 0;
-
 static void set_err(int p){ if(!g_err) g_err = p; }
 
 static void scan_init(Scanner *S, const char *src, size_t len){
@@ -50,17 +53,15 @@ static int getc2(Scanner *S){
     S->at_line_start = (c=='\n');
     return c;
 }
-
-// Skips spaces and Python-style comments
 static void skip_ws_and_comment(Scanner *S){
     for(;;){
         while(isspace(peek(S))) getc2(S);
-        if (S->at_line_start && peek(S)=='#'){
-            while(1){
-                int c = getc2(S);
-                if (c=='\n' || c==EOF) break;
+        if (S->at_line_start){
+            size_t j=S->i; while(j<S->len && isspace((unsigned char)S->src[j]) && S->src[j]!='\n') j++;
+            if (j<S->len && S->src[j]=='#'){
+                while(1){ int c=getc2(S); if(c=='\n'||c==EOF) break; }
+                continue;
             }
-            continue;
         }
         break;
     }
@@ -102,15 +103,12 @@ static Token next_tok(Scanner *S){
     if (c=='('){ getc2(S); t.type=T_LPAREN; return t; }
     if (c==')'){ getc2(S); t.type=T_RPAREN; return t; }
 
-    getc2(S);
-    set_err(t.pos1);
-    t.type = T_EOF;
-    return t;
+    getc2(S); set_err(t.pos1); t.type=T_EOF; return t;
 }
 
 typedef struct { Token *a; size_t n, cap; } TV;
 static void tv_push(TV *v, Token t){
-    if (v->n==v->cap){ v->cap = v->cap? v->cap*2 : 64; v->a = realloc(v->a, v->cap*sizeof(Token)); }
+    if (v->n==v->cap){ v->cap = v->cap? v->cap*2 : 64; v->a = (Token*)realloc(v->a, v->cap*sizeof(Token)); }
     v->a[v->n++] = t;
 }
 
@@ -130,45 +128,36 @@ static double parse_primary(Parser *P, int *outpos){
         double v = parse_expr(P);
         if (!p_match(P,T_RPAREN)){
             Token *u = p_peek(P);
-            if (u) set_err(u->pos1);
-            else set_err(lpos);
+            if (u) set_err(u->pos1); else set_err(lpos);
         }
-        *outpos = lpos;
-        return v;
+        *outpos = lpos; return v;
     }
-    set_err(t->pos1);
-    return 0;
+    set_err(t->pos1); return 0;
 }
 
 static double parse_unary(Parser *P, int *outpos){
-    int sign = 1;
-    int pos = 0;
+    int sign = 1, pos = 0;
     while (p_match(P,T_PLUS) || p_match(P,T_MINUS)){
         Token *prev = &P->toks.a[P->i-1];
         if (prev->type==T_MINUS) sign = -sign;
         pos = prev->pos1;
     }
     double v = parse_primary(P, &pos);
-    *outpos = pos;
-    return sign*v;
+    *outpos = pos; return sign*v;
 }
 
-// Power operator (right-associative)
 static double parse_power(Parser *P, int *outpos){
     double left = parse_unary(P, outpos);
     if (p_match(P,T_POW)){
-        int rpos=0;
-        double right = parse_power(P, &rpos);
-        *outpos = P->toks.a[P->i-1].pos1;
-        return pow(left, right);
+        int rpos=0; double right = parse_power(P, &rpos);
+        *outpos = P->toks.a[P->i-1].pos1; return pow(left, right);
     }
     return left;
 }
 
 static double parse_term(Parser *P, int *outpos){
-    int apos=0;
-    double val = parse_power(P,&apos);
-    while(1){
+    int apos=0; double val = parse_power(P,&apos);
+    for(;;){
         if (p_match(P,T_STAR)){
             int bpos=0; double b = parse_power(P,&bpos);
             val *= b; *outpos = bpos;
@@ -182,9 +171,8 @@ static double parse_term(Parser *P, int *outpos){
 }
 
 static double parse_expr(Parser *P){
-    int pos=0;
-    double v = parse_term(P,&pos);
-    while(1){
+    int pos=0; double v = parse_term(P,&pos);
+    for(;;){
         if (p_match(P,T_PLUS)){ int p2=0; v += parse_term(P,&p2); }
         else if (p_match(P,T_MINUS)){ int p2=0; v -= parse_term(P,&p2); }
         else break;
@@ -236,7 +224,11 @@ static const char* getenv_or(const char *k, const char *d){
 static int ensure_dir(const char *path){
     struct stat st;
     if (stat(path,&st)==0){
+#ifdef S_ISDIR
+        if (S_ISDIR(st.st_mode)) return 0;
+#else
         if ((st.st_mode & S_IFMT) == S_IFDIR) return 0;
+#endif
         errno = ENOTDIR; return -1;
     }
 #ifdef _WIN32
@@ -251,8 +243,7 @@ static void build_default_outdir(const char *input_path, char *out, size_t n){
     const char *base = slash? slash+1 : input_path;
     char base_noext[256]; memset(base_noext,0,sizeof(base_noext));
     strncpy(base_noext, base, sizeof(base_noext)-1);
-    char *dot = strrchr(base_noext, '.');
-    if (dot) *dot = '\0';
+    char *dot = strrchr(base_noext, '.'); if (dot) *dot = '\0';
     const char *user = getenv_or("USER","student");
     const char *sid  = getenv_or("STUDENT_ID","231ADB119");
     snprintf(out, n, "%s_%s_%s", base_noext, user, sid);
@@ -275,23 +266,19 @@ static char* read_all(const char *path, size_t *olen){
     size_t n = fread(buf,1,(size_t)sz,f); fclose(f); buf[n]='\0'; if(olen) *olen=n; return buf;
 }
 
+static int ends_with(const char *s, const char *suf){
+    size_t a=strlen(s), b=strlen(suf); if(b>a) return 0; return strncmp(s+(a-b),suf,b)==0;
+}
+
 static int process_one(const char *in_path, const char *out_dir){
     size_t len=0; char *buf = read_all(in_path,&len);
     if(!buf){ fprintf(stderr,"read fail: %s\n", in_path); return 1; }
-
     if (ensure_dir(out_dir)!=0){ fprintf(stderr,"outdir fail: %s\n", out_dir); free(buf); return 1; }
-
     char out_name[512]; build_output_filename(in_path,out_name,sizeof(out_name));
     char out_path[1024]; snprintf(out_path,sizeof(out_path), "%s%s%s", out_dir, SEP, out_name);
-    FILE *fo = fopen(out_path,"wb");
-    if(!fo){ fprintf(stderr,"write fail: %s\n", out_path); free(buf); return 1; }
-
+    FILE *fo = fopen(out_path,"wb"); if(!fo){ fprintf(stderr,"write fail: %s\n", out_path); free(buf); return 1; }
     (void)eval_and_write(buf,len,fo);
     fclose(fo); free(buf); return 0;
-}
-
-static int ends_with(const char *s, const char *suf){
-    size_t a=strlen(s), b=strlen(suf); if(b>a) return 0; return strncmp(s+(a-b),suf,b)==0;
 }
 
 static void usage(void){
